@@ -1,1 +1,42 @@
-adfasfasfasfas
+double x = ins->position().lon();
+  double y = ins->position().lat();
+  double longitude=x;
+  double latitude=y;
+  x *= DEG_TO_RAD_LOCAL;
+  y *= DEG_TO_RAD_LOCAL;
+
+  pj_transform(wgs84pj_source_, utm_target_, 1, 1, &x, &y, NULL);
+
+  gps_msg->mutable_position()->set_x(x);
+  gps_msg->mutable_position()->set_y(y);
+  gps_msg->mutable_position()->set_z(ins->position().height());
+
+  // 2. orientation
+  double total_offset,vehicle_offset,central_meridian,transformation_offset;
+  vehicle_offset=0.5;
+  central_meridian=6*(int(longitude/6+1))-3; 
+  transformation_offset=abs(longitude - central_meridian)*sin(abs(latitude));
+  total_offset= vehicle_offset + transformation_offset;
+  Eigen::Quaterniond q =
+      Eigen::AngleAxisd(ins->euler_angles().z() + total_offset - 90 * DEG_TO_RAD_LOCAL,
+                        Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(-ins->euler_angles().y(), Eigen::Vector3d::UnitX()) *
+      Eigen::AngleAxisd(ins->euler_angles().x(), Eigen::Vector3d::UnitY());
+      
+      
+      
+      
+      
+      
+      
+  // return (90.0 - azimuth) * DEG_TO_RAD;
+  double total_offset,vehicle_offset,central_meridian,transformation_offset,longitude,latitude;
+  longitude=ins_.position().lon();
+  latitude=ins_.position().lon();
+  vehicle_offset=0.5;
+  central_meridian=6*(int(longitude/6) + 1) - 3;
+  transformation_offset=abs(longitude-central_meridian)*sin(abs(latitude));
+  total_offset=vehicle_offset+transformation_offset;
+  return azimuth>358.6 ? (90.0 - (azimuth - 358.6)) * DEG_TO_RAD : (90.0 - (azimuth + total_offset)) * DEG_TO_RAD;
+
+}
