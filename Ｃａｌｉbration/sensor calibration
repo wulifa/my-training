@@ -1,0 +1,220 @@
+
+Vehicle Sensor Calibration
+Last edited by Osman Shawkat 4 hours ago
+New page Page history
+Edit
+
+Proper vehicle sensor calibration is critical for any autonomous driving task. For example, poor calibration will impede vehicle localization, traffic light detection, and obstacle detection.
+
+Note that our current calibration tools and procedures are not necessarily complete or unified. Improvements, both to the procedure and this documentation, are strongly encouraged
+Apollo Calibration System Overview
+
+For any robotics system to effectively observe the world around it, the robot must know where exactly each sensor's pose. For example, identifying a truck in a camera image does not tell you where the truck is unless you also know where your camera is pointed
+
+Calibration can be divided into two exclusive parts:
+
+    Extrinsics - sensor pose (position and orientation)
+    Intrinsics - some sensors (eg cameras, lidar) have intrinsic parameters that map between the sensor frame and sensor outputs (eg camera matrix and distortion factors). They are not affected by changes in extrinsics (pose)
+
+Apollo utilizes a sensor-to-sensor extrinsic calibration model (versus a hub and spoke model) where sensor pose is calculated relative to another sensor rather than directly to a central sensor/reference point. For example, the long_camera calibration is given relative to the short_camera rather than the Novatel or other sensor. A diagram of Apollo's chain of extrinsic calibrations is provided below:
+
+Apollo_Calibration_chain.svg
+
+Warning: Because Apollo uses a chain of extrinsic calibrations, adjusting one part will impact all downstream calibrations (eg tuning Novatel-Velodyne64 calibration will impact the calibration of the cameras)
+
+Because of this chaining of extrinsics, it is highly recommended to calibrate and verify each level of the chain before moving on to a downstream sensor. Eg ensure Novatel-Velodyne64 is well calibrated before trying to calibrate any cameras
+Files and Structure
+
+Each vehicle should have its own calibration configuration folder in modules/calibration/data (eg US Build 2), allowing a user to change vehicles by selecting a car from the drop-down menu in Dreamview. You can find documentation on the use of each file in these folders here. It is strongly recommended that you include a README (example) in your calibration folder to track the sources and quality of your various calibrations
+
+For this guide, we assume you have created a new vehicle calibration folder called sample_car. It is easiest to copy another calibration folder as your starting point and just modify any files as needed. Many of the calibration values you generate will need to be reformatted to align with Apollo's standards; use Apollo's MKZ Example vehicle files as a format guide
+
+Warning: This guide focuses on sensor calibration and does not cover most vehicle calibrations (eg sample_car/vehicle_param.pb.txt)
+Calibration Process
+Prerequisites
+
+Before diving into the calibration process, you need to familiarize yourself with Apollo's Coordinate System. It explains both the vehicle's coordinate axis (y forward, x right, z up) and the mapping/localization system used in the Apollo framework
+
+Keep in mind that extrinsics need to be recalibrated any time a sensor is moved so it is recommended that you adjust sensor poses before performing this procedure
+
+This guide assumes that all your sensors are setup and functioning within Apollo
+Apollo Calibration Tools
+
+Apollo does provide its own calibration tools to handle IMU-Vehicle, Camera-Lidar, Camera-Camera, Radar-Camera, and Multiple Lidar-GNSS calibrations. Of these, only the Multiple Lidar-GNSS tool executes properly; the rest produce this type of error. The tools are released as binary files so it is not possible to debug the error
+CMM
+
+A CMM (Coordinate Measuring Machine) tool can provide very precise measurements of 3D distances between objects (<0.1mm). While not strictly necessary, having your vehicle sensors measured by CMM can greatly improve initial extrinsic calibration guesses (required for many calibration routines) and reduce the amount of fine-tuning required
+Novatel Calibration
+
+The Novatel localization system consists of a GNSS receiver and an IMU (and an RTK correction service for higher precision). The origin of the IMU is taken as the origin of the Novatel system so all measurements to the Novatel (eg Novatel-Velodyne64) should be measured from the IMU. Apollo states that the IMU should be placed above the center of the rear axle of the vehicle
+
+The Novatel calibration consists of:
+
+    2x Lever arm (GPS Antenna) calibration (one for each antenna)
+    Vehicle to IMU rotation
+
+Note: UTM coordinates, which Apollo uses, has some error, which is most apparent toward the extremes of a UTM zone. As of commit 70b32879, hard-coded azimuth corrections have been applied for the Haval Farmington Hills office (UTM zone 17)
+Lever Arm Calibration
+
+Lever Arm calibration measures the translation between the IMU and the GPS antenna. If you already have CMM values, you may choose to skip this step
+
+Generally, this will need to be run twice, once for each GPS antenna, because the Novatel calibration routine only calibrates one antenna at a time. You can just swap antenna plugs on the device to calibrate the secondary antenna. REPLACE CABLING TO ORIGINAL SETUP when you finish
+
+This procedure is performed in the Novatel Connect utility, which should be pre-installed on the vehicle HPC. Start the utility (you may need to do so as root) and establish a connection to the hardware. The following commands are to be entered into the Novatel Connect console. Refer to the SPAN OEM6 manual (page 68) for more information on this calibration procedure
+
+This procedure requires an initial guess of lever arm calibration values to seed the optimizer. While a CMM measure is ideal, you can also try measuring with a ruler or other device. The more accurate your estimate, the better the calibration output will be. The precision of your measurements is used to define the search range of the calibration
+
+To validate your results, you may wish to run this procedure more than once, possibly with different initial estimates to make sure that your results are consistent
+
+    Connect IMU to receiver. You may need to modify the command if you are using a different IMU model
+
+    CONNECTIMU COM3 IMU_KVH_1750
+
+    Set the IMU orientation with the Z axis pointing up (see pages 74-76 in reference for details)
+
+    SETIMUORIENTATION 5
+
+    Enter the initial estimate for the lever arm, in meters, using command below. This will define the search space for the calibration routine so don't set standard deviation (ie error bounds) values too low or the Novatel may not be able to find the correct solution.
+
+    Warning - The routine will still return a value even if the correct answer is outside the search range. It is better to err on too large of standard deviation values
+
+    SETIMUTOANTOFFSET <x_offset> <y_offset> <z_offset> <x_stddev> <y_stddev> <z_stddev>
+
+    Eg:
+
+    SETIMUTOANTOFFSET -0.235593726040874 -0.180701351954547 1.19211096188254 0.1 0.1 0.1
+
+    Pay close attention to INS_Status dial within NovAtelConnect. The status of that dial should change from: Unknown -> Aligning -> Align Complete
+
+    Run the following to monitor calibration
+
+    log BESTLEVERARM ONCHANGED
+
+    Determine how you want define the lever arm calibration as complete, either by running for a certain amount of time or when the calibration precision has reached a certain level. It is recommended that you limit calibration time to 600s
+
+    LEVERARMCALIBRATE <switch> <maxtime> <maxstd>
+
+    Example:
+
+    LEVERARMCALIBRATE ON 600
+
+    IMPORTANT!! After you issue above command, check INS_Status dial again. If it's in "Align complete" mode, move the vehicle back and forth in a straight line until you see the status change to "GOOD". Calibration will NOT start calculating until your system gets into "GOOD" INS_Status
+
+    Drive in figure 8s. Make an equal number of right and left turns. Some height variation can be useful. When calibration is complete (either due to timeout or precision), the BESTLEVERARM log should print some output eg:
+
+    BESTLEVERARM USB2 0 27.5 FINESTEERING 2048 227610.018 00000800 5dcc 14102
+    <     -0.2214350436936281 -0.1494633570094769 1.3094601744425696 0.0097042446657249 0.0099625276737750 0.0465438881358563 5
+
+    Repeat this process for the other GPS antenna. When done with both antennas, be sure to set values for each antenna (otherwise the secondary antenna value is being saved as primary):
+
+    Primary Antenna:
+
+    SETIMUTOANTOFFSET <x_offset> <y_offset> <z_offset> <x_stddev> <y_stddev> <z_stddev>
+
+    Secondary Antenna:
+
+    SETIMUTOANTOFFSET2 <x_offset> <y_offset> <z_offset> <x_stddev> <y_stddev> <z_stddev>
+
+    Eg:
+
+    SETIMUTOANTOFFSET -0.2214350436936281 -0.1494633570094769 1.3094601744425696 0.0097042446657249 0.0099625276737750 0.0465438881358563
+    SETIMUTOANTOFFSET2 -0.2888668394935097 1.8010860327065109 1.2679798055619986 0.0065546743506474 0.0067060540102296 0.0313142672007717
+
+    Save this rotation for future use:
+
+    SAVECONFIG
+
+Use these calculated values to fill in the sample_car/gnss_params/ant_imu_leverarm.yaml file
+IMU-Vehicle Rotation Calibration
+
+Apollo expects the IMU to be placed above the center of the vehicle's rear axis, with its axes aligned with the vehicle. In practice, it is unlikely that we are able to mount the IMU with perfect vehicle alignment so we use the Novatel RVBCALIBRATE routine to find the actual rotation relative to the vehicle and have the Novatel automatically apply the correction to the data it is sending to Apollo.
+
+Like the Lever Arm calibration above, this procedure is performed in the Novatel Connect utility. Refer to the SPAN OEM6 manual (page 65 and 69) for more details.
+
+You will want to run this procedure multiple times and use the median result. It is much shorter than the Lever Arm calibration process
+
+    Ensure that Lever Arm is well calibrated before starting this routine
+
+    Check GPS lock status. This should produce an output which includes FINE STEERING
+
+    log INSPVAX once
+
+    Track when the calibration is complete by monitoring for a change in rotation values
+
+    log VEHICLEBODYROTATION onchanged
+
+    Set the initial estimate for IMU-Vehicle rotation values and uncertainty (ie search range) in degrees. This is similar to the SETIMUTOANTOFFSET step in the Lever Arm calibration process).
+
+    VEHICLEBODYROTATION <x_rot> <y_rot> <z_rot> <x_stddev> <y_stddev> <z_stddev>
+
+    Example:
+
+    VEHICLEBODYROTATION 0 0 0 5 5 10
+
+    Start vehicle calibration routine
+
+    RVBCALIBRATE ENABLE
+
+    Drive the car in a straight line on level ground at >5m/s (18kph). Avoid driving on areas with constant, non-zero slope. If you have limited space, use following command to specify the velocity at which the system will start calibration. The minimum allowable value is 1.15m/s (4.1kph)
+
+    SETALIGNMENTVEL <velocity>
+
+    Example:
+
+    SETALIGNMENTVEL 2.5
+
+    When the uncertainty is sufficiently low, the calibration will stop and the VEHICLEBODYROTATION log will be overwritten. You should see the output in the console
+
+    Example output:
+
+    VEHICLEBODYROTATION -0.319887954300844 0.446655710679936 -1.92809138332737 0.376901076259101 2.20620223578938 0.471974534149716
+
+    While the above will calculate the IMU-vehicle rotation, it will not actually be used unless APPLYVEHICLEBODYROTATION is enabled:
+
+    APPLYVEHICLEBODYROTATION ENABLE
+
+    Save this configuration for future use
+
+    SAVECONFIG
+
+These values can be written into the sample_car/vehicle_params/vehicle_imu_extrinsics.yaml file though it appears that it is only used by MSF localization
+Lidar Calibration
+
+This guide provides instructions on calibrating a single Velodyne lidar (here the HDL-64 S3) but it should be possible to extend the overall framework to multiple units.
+Lidar Intrinsics
+
+Every lidar unit has its own unique imperfections. Intrinsic calibration attempts to correct various imperfections for each laser (eg intensity, distance, orientation). The calibration values should be provided by your lidar manufacturer. These values should be placed into the sample_car/velodyne_params/64E_S3_calibration_example.yaml file. Note that some formatting changes may be required to align with Apollo's expected format
+
+For the Velodyne HDL-64, an intrinsics file is not necessarily required as Apollo, by default, uses 'online calibration'. You can change this behavior to use the intrinsics yaml file instead setting the velodyne64_calibration_online argument to true in sample_car/start_velodyne.launch
+Lidar Extrinsics
+
+If you've generated lidar extrinsics from CMM, you may choose to skip directly to the next step. Otherwise, you will utilize Apollos' Multiple Lidar-GNSS calibration tool
+
+You provide the tool with an initial guess of lidar pose, relative to the Novatel frame (origin of the IMU). Your initial value must be within 5° and 10cm of the correct pose.
+
+Per the Validation section of the tool, you should see sharp, well defined lines and corners in the output *.pcd files, such as in image below
+
+good_calib
+
+Blurry, rounded, or ghosted edges, like below, indicate poor calibration
+
+poor_calib
+
+Once you're happy with the validation results, write the calibration values into sample_car/velodyne_params/velodyne64_novatel_extrinsics_example.yaml. You can then move on to further fine tuning and validation
+Lidar Extrinsics Validation
+
+Even after CMM or Apollo's Multiple Lidar-GNSS calibration, it is possible that there is still some error in the calibration values. One way to validate your calibration quality is to confirm that static objects in the world maintain their same position, regardless of their relative orientation and distance from the ego vehicle. Seeing a static obstacle drift as the vehicle moves toward/away indicates incorrect rotation calibration. This method works because error in rotation is magnified at a distance but, as the obstacle gets closer, the effect of rotation error becomes less significant and, for very close objects, translation error becomes dominant
+
+Note that this technique does not factor in translation errors. This should be fine as our ability to measure translation is generally more accurate than rotation. Translation errors are also of fixed magnitude for all points the lidar sees. For example, a 10cm translation error (which is fairly large, even when measured by ruler) will result in all perceived objects reporting incorrect locations by 10cm. Compare this to an even 1° rotation error (difficult to measure to this accuracy), which at 100m will mis-report obstacle locations by 1.75m
+
+Process:
+
+    Record a ROS bag (with lidar data) in Apollo. The ego vehicle should be driving toward an object(s), preferably of medium size (~1-2m) and simple, well defined shape (eg sphere, rectangular prism). The remainder of this procedure an be performed at your desk
+    Use the ROS marker visualizer tool TODO to place a marker at or near the object. This marker will be used as a static reference location so you can observe any drifting in the lidar point cloud. It does not have to be exact but, the closer you place it, the easier it is to observe and measure drift
+    With Dreamview running, play back the recorded bag file and open up Rviz. Rviz will need to be started from your host machine as it is not available in the Apollo docker container
+    Observe the relative distance between the obstacle point cloud and its associated marker as the vehicle approaches the obstacle. If your calibration is good, the distance between the obstacle point cloud and marker should remain constant. Otherwise, there is some error in your calibration (Lever Arm, IMU-Vehicle, or Novatel-Velodyne64)
+
+If your calibration is not good, revisit the upstream calibrations (Lever Arm and IMU-Vehicle) first as any error there will propagate through to all other calibrations (including lidar and cameras). If you are confident in your upstream calibrations, fine-tuning may improve your Novatel-Velodyne64 calibration.
+
+Note: In theory, translation error can also be accounted for by using markers for objects of known positions but, in general, our measurement of objects is usually within a few centimeters, which is similar to the expected error range of lidar translation
+Lidar Extrinsics Fine-Tuning
